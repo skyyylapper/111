@@ -8,12 +8,12 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import Command, StateFilter
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.session.aiohttp import AiohttpSession
-from config import BOT_TOKEN, ADMIN_ID, YOO_MONEY_WALLET, YOO_MONEY_CARDS, URALSIB_CARD, PROXY_URL
+from config import BOT_TOKEN, ADMIN_ID, YOO_MONEY_WALLET, YOO_MONEY_CARDS, URALSIB_CARD
 import database
 from database import create_order, update_order_status, get_order_by_id
 from yoomoney_checker import check_payments
 from yoomoney_api import create_yoomoney_invoice
-
+PROXY_URL = getattr(config, "PROXY_URL", None)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
