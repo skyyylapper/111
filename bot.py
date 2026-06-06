@@ -1,7 +1,7 @@
 import uuid
 import asyncio
 import logging
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
