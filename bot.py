@@ -9,20 +9,23 @@ from aiogram.filters import Command, StateFilter
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.session.aiohttp import AiohttpSession
 from config import BOT_TOKEN, ADMIN_ID, YOO_MONEY_WALLET, YOO_MONEY_CARDS, URALSIB_CARD
+import config as cfg  # для безопасного доступа к PROXY_URL, если она есть
 import database
 from database import create_order, update_order_status, get_order_by_id
 from yoomoney_checker import check_payments
 from yoomoney_api import create_yoomoney_invoice
-PROXY_URL = getattr(config, "PROXY_URL", None)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Прокси для Telegram API (если указан)
+# Прокси: берём из config, если есть, иначе None
+PROXY_URL = getattr(cfg, "PROXY_URL", None)
 session = AiohttpSession(proxy=PROXY_URL) if PROXY_URL else None
 bot = Bot(token=BOT_TOKEN, session=session)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 router = Router()
+
 
 class ExchangeStates(StatesGroup):
     waiting_amount = State()
