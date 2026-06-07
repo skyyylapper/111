@@ -8,8 +8,9 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import Command, StateFilter
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.session.aiohttp import AiohttpSession
-from config import BOT_TOKEN, ADMIN_ID, YOO_MONEY_WALLET, YOO_MONEY_CARDS, URALSIB_CARD
-import config as cfg  # для безопасного доступа к PROXY_URL, если она есть
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
+from config import BOT_TOKEN, ADMIN_ID, YOO_MONEY_WALLET, YOO_MONEY_CARDS, URALSIB_CARD, PROXY_URL
+import config as cfg  # на случай, если понадобятся другие переменные
 import database
 from database import create_order, update_order_status, get_order_by_id
 from yoomoney_checker import check_payments
@@ -18,14 +19,15 @@ from yoomoney_api import create_yoomoney_invoice
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Прокси: берём из config, если есть, иначе None
-PROXY_URL = getattr(cfg, "PROXY_URL", None)
+# Игнорируемые пользователи (добавьте нужные ID)
+IGNORED_USERS = [8479074062]
+
+# Прокси для Telegram API (если указан)
 session = AiohttpSession(proxy=PROXY_URL) if PROXY_URL else None
 bot = Bot(token=BOT_TOKEN, session=session)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 router = Router()
-
 
 class ExchangeStates(StatesGroup):
     waiting_amount = State()
@@ -43,6 +45,17 @@ payment_method_keyboard = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="💳 ЮMoney (автоматическая проверка)", callback_data="pay_yoomoney")],
     [InlineKeyboardButton(text="🏦 Уралсиб (ручная проверка)", callback_data="pay_uralsib")]
 ])
+
+# ---------- Middleware для игнорирования пользователей ----------
+class IgnoreUsersMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        if hasattr(event, 'from_user') and event.from_user:
+            if event.from_user.id in IGNORED_USERS:
+                return  # тихо игнорируем
+        return await handler(event, data)
+
+dp.update.middleware(IgnoreUsersMiddleware())
+# -----------------------------------------------------------------
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
@@ -153,7 +166,6 @@ async def process_payment_method(callback: types.CallbackQuery, state: FSMContex
         await state.clear()
     await callback.answer()
 
-# Нажатие "Я оплатил" для ЮMoney
 @router.callback_query(F.data.startswith("yoomoney_paid_"))
 async def yoomoney_paid(callback: types.CallbackQuery):
     order_id = int(callback.data.split("_")[-1])
@@ -171,7 +183,6 @@ async def yoomoney_paid(callback: types.CallbackQuery):
     )
     await callback.answer("Заявка поставлена в очередь на проверку.")
 
-# Нажатие "Я оплатил" для Уралсиб -> запрос скриншота
 @router.callback_query(F.data.startswith("upload_"))
 async def request_screenshot(callback: types.CallbackQuery, state: FSMContext):
     order_id = int(callback.data.split("_")[1])
@@ -184,29 +195,29 @@ async def request_screenshot(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(order_id=order_id)
     await callback.answer()
 
-@router.message(StateFilter(ExchangeStates.waiting_screenshot), F.photo)
-async def receive_screenshot(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    order_id = data["order_id"]
-    file_id = message.photo[-1].file_id
-    await update_order_status(order_id, "waiting_approval", screenshot_file_id=file_id)
-    order = await get_order_by_id(order_id)
-
-    admin_caption = (
-        f"📬 <b>Новая заявка #{order_id}</b>\n"
-        f"👤 {order['username']} (ID: {order['user_id']})\n"
-        f"💰 {order['amount']} ₽ → {order['currency']}\n"
-        f"Реквизиты: {order['payment_details']}\n"
-        f"Способ: {order['payment_method']}\n\n"
-        f"Для подтверждения ответьте на это сообщение командой /approve"
-    )
-    await bot.send_photo(ADMIN_ID, file_id, caption=admin_caption, parse_mode="HTML")
-    await message.answer("✅ Скриншот отправлен администратору.")
-    await state.clear()
-
+# Единый обработчик для состояния ожидания скриншота (принимает фото и всё остальное)
 @router.message(StateFilter(ExchangeStates.waiting_screenshot))
-async def non_photo(message: types.Message):
-    await message.answer("❌ Пришлите скриншот как изображение.")
+async def screenshot_handler(message: types.Message, state: FSMContext):
+    if message.photo:
+        data = await state.get_data()
+        order_id = data["order_id"]
+        file_id = message.photo[-1].file_id
+        await update_order_status(order_id, "waiting_approval", screenshot_file_id=file_id)
+        order = await get_order_by_id(order_id)
+
+        admin_caption = (
+            f"📬 <b>Новая заявка #{order_id}</b>\n"
+            f"👤 {order['username']} (ID: {order['user_id']})\n"
+            f"💰 {order['amount']} ₽ → {order['currency']}\n"
+            f"Реквизиты: {order['payment_details']}\n"
+            f"Способ: {order['payment_method']}\n\n"
+            f"Для подтверждения ответьте на это сообщение командой /approve"
+        )
+        await bot.send_photo(ADMIN_ID, file_id, caption=admin_caption, parse_mode="HTML")
+        await message.answer("✅ Скриншот отправлен администратору.")
+        await state.clear()
+    else:
+        await message.answer("❌ Пришлите скриншот как изображение (не файл).")
 
 @router.message(Command("approve"))
 async def cmd_approve(message: types.Message):
