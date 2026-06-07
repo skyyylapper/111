@@ -14,8 +14,8 @@ async def init_db():
                 currency TEXT NOT NULL,
                 payment_details TEXT NOT NULL,
                 payment_method TEXT,
+                chosen_requisite TEXT,
                 status TEXT DEFAULT 'created',
-                invoice_id TEXT,
                 screenshot_file_id TEXT,
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now'))
@@ -23,11 +23,11 @@ async def init_db():
         """)
         await db.commit()
 
-async def create_order(user_id, username, amount, currency, payment_details, payment_method=None, invoice_id=None):
+async def create_order(user_id, username, amount, currency, payment_details, payment_method, chosen_requisite=None):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "INSERT INTO orders (user_id, username, amount, currency, payment_details, payment_method, invoice_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'created')",
-            (user_id, username, amount, currency, payment_details, payment_method, invoice_id)
+            "INSERT INTO orders (user_id, username, amount, currency, payment_details, payment_method, chosen_requisite, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'created')",
+            (user_id, username, amount, currency, payment_details, payment_method, chosen_requisite)
         )
         order_id = cursor.lastrowid
         await db.commit()
@@ -40,7 +40,6 @@ async def update_order_status(order_id, status, **kwargs):
         set_clause = ", " + ", ".join([f"{k}=?" for k in kwargs.keys()])
         params.extend(kwargs.values())
     params.extend([datetime.now().isoformat(), order_id])
-
     query = f"UPDATE orders SET status=?{set_clause}, updated_at=? WHERE id=?"
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(query, params)
@@ -52,12 +51,3 @@ async def get_order_by_id(order_id):
         cursor = await db.execute("SELECT * FROM orders WHERE id=?", (order_id,))
         row = await cursor.fetchone()
         return dict(row) if row else None
-
-async def get_pending_yoomoney_orders():
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM orders WHERE payment_method='yoomoney' AND status='waiting_payment'"
-        )
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
