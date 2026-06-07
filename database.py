@@ -34,11 +34,9 @@ async def create_order(user_id, username, amount, currency, payment_details, pay
         return order_id
 
 async def update_order_status(order_id, status, **kwargs):
-    # Строим запрос безопасно: сначала status, потом дополнительные поля (если есть), потом updated_at
     set_clause = ""
     params = [status]
     if kwargs:
-        # Добавляем запятую перед каждым дополнительным полем
         set_clause = ", " + ", ".join([f"{k}=?" for k in kwargs.keys()])
         params.extend(kwargs.values())
     params.extend([datetime.now().isoformat(), order_id])
@@ -56,7 +54,6 @@ async def get_order_by_id(order_id):
         return dict(row) if row else None
 
 async def get_pending_yoomoney_orders():
-    """Заявки ЮMoney, ожидающие оплаты."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
