@@ -22,9 +22,14 @@ async def create_yoomoney_invoice(amount: float, label: str) -> str | None:
         "comment": f"Оплата заявки {label}",
     }
 
+    logger.info(f"Создаём счёт: amount={amount}, to={YOO_MONEY_WALLET}, label={label}")
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, data=payload, timeout=15) as resp:
+                # Читаем тело ответа ОДИН раз и логируем
+                text = await resp.text()
+                logger.info(f"API ЮMoney ответ {resp.status}: {text}")
+
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("status") == "success":
@@ -32,7 +37,7 @@ async def create_yoomoney_invoice(amount: float, label: str) -> str | None:
                     else:
                         logger.error(f"YooMoney invoice error: {data}")
                 else:
-                    logger.error(f"YooMoney API returned {resp.status}: {await resp.text()}")
+                    logger.error(f"YooMoney API returned {resp.status}: {text}")
     except Exception as e:
         logger.error(f"Failed to create YooMoney invoice: {e}")
     return None
