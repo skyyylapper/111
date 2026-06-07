@@ -34,21 +34,18 @@ async def create_order(user_id, username, amount, currency, payment_details, pay
         return order_id
 
 async def update_order_status(order_id, status, **kwargs):
-    # Если есть дополнительные поля, собираем их
+    # Строим запрос безопасно: сначала status, потом дополнительные поля (если есть), потом updated_at
     set_clause = ""
-    params = []
+    params = [status]
     if kwargs:
-        set_parts = [f"{k}=?" for k in kwargs.keys()]
-        set_clause = ", " + ", ".join(set_parts)
+        # Добавляем запятую перед каждым дополнительным полем
+        set_clause = ", " + ", ".join([f"{k}=?" for k in kwargs.keys()])
         params.extend(kwargs.values())
+    params.extend([datetime.now().isoformat(), order_id])
 
-    params.extend([status, datetime.now().isoformat(), order_id])
-
+    query = f"UPDATE orders SET status=?{set_clause}, updated_at=? WHERE id=?"
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            f"UPDATE orders SET{set_clause} status=?, updated_at=? WHERE id=?",
-            params
-        )
+        await db.execute(query, params)
         await db.commit()
 
 async def get_order_by_id(order_id):
