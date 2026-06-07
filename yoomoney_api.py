@@ -9,6 +9,7 @@ async def create_yoomoney_invoice(amount: float, label: str) -> str | None:
         logger.error("YOO_MONEY_TOKEN не задан")
         return None
 
+    # Сначала создаём счёт через API, чтобы label попал в историю
     url = "https://yoomoney.ru/api/request-payment"
     headers = {
         "Authorization": f"Bearer {YOO_MONEY_TOKEN}",
@@ -26,33 +27,21 @@ async def create_yoomoney_invoice(amount: float, label: str) -> str | None:
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, data=payload, timeout=15) as resp:
-                text = await resp.text()
-                logger.info(f"API ЮMoney ответ {resp.status}: {text}")
-
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("status") == "success":
-                        # Если есть redirect_url — используем его
-                        redirect_url = data.get("redirect_url")
-                        if redirect_url:
-                            return redirect_url
-                        # Иначе собираем ссылку через request_id
-                        request_id = data.get("request_id")
-                        if request_id:
-                            return (
-                                "https://yoomoney.ru/transfer/quickpay"
-                                f"?requestId={request_id}"
-                                f"&sum={amount:.2f}"
-                                f"&label={label}"
-                                "&comment=Оплата+заявки"
-                            )
-                            
-                        logger.error("Нет ни redirect_url, ни request_id в ответе")
-                        return None
+                        # Формируем прямую ссылку на перевод с заполненной суммой
+                        return (
+                            f"https://yoomoney.ru/transfer/quickpay"
+                            f"?to={YOO_MONEY_WALLET}"
+                            f"&sum={amount:.2f}"
+                            f"&label={label}"
+                            "&formcomment=Оплата+заявки"
+                        )
                     else:
                         logger.error(f"YooMoney invoice error: {data}")
                 else:
-                    logger.error(f"YooMoney API returned {resp.status}: {text}")
+                    logger.error(f"YooMoney API returned {resp.status}: {await resp.text()}")
     except Exception as e:
         logger.error(f"Failed to create YooMoney invoice: {e}")
     return None
