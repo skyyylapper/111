@@ -26,14 +26,28 @@ async def create_yoomoney_invoice(amount: float, label: str) -> str | None:
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, data=payload, timeout=15) as resp:
-                # Читаем тело ответа ОДИН раз и логируем
                 text = await resp.text()
                 logger.info(f"API ЮMoney ответ {resp.status}: {text}")
 
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("status") == "success":
-                        return data.get("redirect_url")
+                        # Если есть redirect_url — используем его
+                        redirect_url = data.get("redirect_url")
+                        if redirect_url:
+                            return redirect_url
+                        # Иначе собираем ссылку через request_id
+                        request_id = data.get("request_id")
+                        if request_id:
+                            return (
+                                "https://yoomoney.ru/transfer/quickpay"
+                                f"?requestId={request_id}"
+                                f"&label={label}"
+                                f"&amount={amount:.2f}"
+                                "&comment=Оплата+заявки"
+                            )
+                        logger.error("Нет ни redirect_url, ни request_id в ответе")
+                        return None
                     else:
                         logger.error(f"YooMoney invoice error: {data}")
                 else:
