@@ -1,4 +1,3 @@
-import uuid
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, Router, types, F
@@ -9,20 +8,15 @@ from aiogram.filters import Command, StateFilter
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
-from config import BOT_TOKEN, ADMIN_ID, YOO_MONEY_WALLET, YOO_MONEY_CARDS, URALSIB_CARD, PROXY_URL
-import config as cfg  # на случай, если понадобятся другие переменные
+from config import BOT_TOKEN, ADMIN_ID, YOO_MONEY_WALLETS, YOO_MONEY_CARDS, URALSIB_CARDS, PROXY_URL
 import database
 from database import create_order, update_order_status, get_order_by_id
-from yoomoney_checker import check_payments
-from yoomoney_api import create_yoomoney_invoice
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Игнорируемые пользователи (добавьте нужные ID)
 IGNORED_USERS = [8479074062]
 
-# Прокси для Telegram API (если указан)
 session = AiohttpSession(proxy=PROXY_URL) if PROXY_URL else None
 bot = Bot(token=BOT_TOKEN, session=session)
 storage = MemoryStorage()
@@ -34,29 +28,35 @@ class ExchangeStates(StatesGroup):
     waiting_currency = State()
     waiting_payment_details = State()
     waiting_payment_method = State()
+    waiting_requisite_choice = State()
     waiting_screenshot = State()
 
+# Клавиатуры
 currency_keyboard = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="💎 USDT BEP20", callback_data="currency_USDT_BEP20")],
     [InlineKeyboardButton(text="🇲🇩 Рубли ПМР", callback_data="currency_RUB_PMR")]
 ])
 
 payment_method_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="💳 ЮMoney (автоматическая проверка)", callback_data="pay_yoomoney")],
+    [InlineKeyboardButton(text="💳 ЮMoney (ручная проверка)", callback_data="pay_yoomoney")],
     [InlineKeyboardButton(text="🏦 Уралсиб (ручная проверка)", callback_data="pay_uralsib")]
 ])
 
-# ---------- Middleware для игнорирования пользователей ----------
+# Middleware игнорирования
 class IgnoreUsersMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if hasattr(event, 'from_user') and event.from_user:
             if event.from_user.id in IGNORED_USERS:
-                return  # тихо игнорируем
+                return
         return await handler(event, data)
 
 dp.update.middleware(IgnoreUsersMiddleware())
-# -----------------------------------------------------------------
 
+# Парсер списков
+def parse_list(env_str):
+    return [item.strip() for item in env_str.split(",") if item.strip()]
+
+# Старт
 @router.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
@@ -73,10 +73,10 @@ async def process_amount(message: types.Message, state: FSMContext):
     try:
         amount = float(message.text.replace(",", "."))
     except ValueError:
-        await message.answer("❌ Пожалуйста, введите число.")
+        await message.answer("❌ Введите число.")
         return
     if amount < 500:
-        await message.answer("❌ Минимальная сумма обмена 500 рублей.")
+        await message.answer("❌ Минимум 500 рублей.")
         return
     await state.update_data(amount=amount)
     await message.answer("Выберите валюту получения:", reply_markup=currency_keyboard)
@@ -102,87 +102,95 @@ async def process_details(message: types.Message, state: FSMContext):
     await message.answer("Выберите способ оплаты:", reply_markup=payment_method_keyboard)
     await state.set_state(ExchangeStates.waiting_payment_method)
 
+# Выбор способа оплаты -> показать список реквизитов
 @router.callback_query(StateFilter(ExchangeStates.waiting_payment_method), F.data.startswith("pay_"))
 async def process_payment_method(callback: types.CallbackQuery, state: FSMContext):
     method = callback.data.split("_", 1)[1]
-    data = await state.get_data()
-    user_id = callback.from_user.id
-    username = callback.from_user.username or "NoUsername"
+    await state.update_data(payment_method=method)
 
     if method == "yoomoney":
-        invoice_id = str(uuid.uuid4())
-        label = f"{user_id}:{invoice_id}"
-        payment_url = await create_yoomoney_invoice(data["amount"], label)
-        if not payment_url:
-            await callback.message.answer("❌ Не удалось создать счёт. Попробуйте позже или свяжитесь с администратором.")
+        wallets = parse_list(YOO_MONEY_WALLETS)
+        if not wallets:
+            await callback.message.answer("❌ Нет доступных кошельков ЮMoney.")
             await callback.answer()
             return
+        # Показываем список кошельков
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💼 {w}", callback_data=f"req_y_{i}")] for i, w in enumerate(wallets)
+        ])
+        await callback.message.edit_text("Выберите кошелёк ЮMoney для перевода:", reply_markup=keyboard)
+        await state.set_state(ExchangeStates.waiting_requisite_choice)
 
+    elif method == "uralsib":
+        cards = parse_list(URALSIB_CARDS)
+        if not cards:
+            await callback.message.answer("❌ Нет доступных карт Уралсиб.")
+            await callback.answer()
+            return
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 {c}", callback_data=f"req_u_{i}")] for i, c in enumerate(cards)
+        ])
+        await callback.message.edit_text("Выберите карту Уралсиб для перевода:", reply_markup=keyboard)
+        await state.set_state(ExchangeStates.waiting_requisite_choice)
+    await callback.answer()
+
+# Пользователь выбрал конкретный реквизит
+@router.callback_query(StateFilter(ExchangeStates.waiting_requisite_choice), F.data.startswith("req_"))
+async def process_requisite_choice(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    method = data["payment_method"]
+    _, target, idx = callback.data.split("_")
+    idx = int(idx)
+
+    if method == "yoomoney":
+        wallets = parse_list(YOO_MONEY_WALLETS)
+        chosen_wallet = wallets[idx]
+        cards = parse_list(YOO_MONEY_CARDS)
+        cards_text = "\n".join([f"• {c}" for c in cards]) if cards else "список карт не указан"
+        text = (
+            f"💳 <b>Оплата через ЮMoney</b>\n\n"
+            f"Сумма: <b>{data['amount']} ₽</b>\n"
+            f"Кошелёк: <code>{chosen_wallet}</code>\n"
+            f"Доступные карты:\n{cards_text}\n\n"
+            f"⚠️ <b>Ручная проверка:</b> после перевода нажмите «Я оплатил» и приложите скриншот."
+        )
+        # Создаём заявку
         order_id = await create_order(
-            user_id=user_id,
-            username=username,
+            user_id=callback.from_user.id,
+            username=callback.from_user.username or "NoUsername",
             amount=data["amount"],
             currency=data["currency"],
             payment_details=data["payment_details"],
             payment_method=method,
-            invoice_id=invoice_id
+            chosen_requisite=chosen_wallet
         )
 
-        cards_list = [c.strip() for c in YOO_MONEY_CARDS.split(",") if c.strip()] if YOO_MONEY_CARDS else []
-        cards_text = "\n".join([f"• {c}" for c in cards_list]) if cards_list else "список пуст"
+    else:  # uralsib
+        cards = parse_list(URALSIB_CARDS)
+        chosen_card = cards[idx]
         text = (
-            f"💳 <b>Счёт на оплату</b>\n\n"
+            f"🏦 <b>Оплата через Уралсиб</b>\n\n"
             f"Сумма: <b>{data['amount']} ₽</b>\n"
-            f"Кошелёк получателя: <code>{YOO_MONEY_WALLET}</code>\n"
-            f"Доступные карты ЮMoney:\n{cards_text}\n\n"
-            f"Для оплаты нажмите кнопку ниже, затем вернитесь и нажмите «✅ Я оплатил»."
+            f"Карта: <code>{chosen_card}</code>\n\n"
+            f"⚠️ <b>Ручная проверка:</b> потребуется скриншот."
         )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💸 Оплатить", url=payment_url)],
-            [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"yoomoney_paid_{order_id}")]
-        ])
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-        await state.clear()
-    else:
-        # Уралсиб
         order_id = await create_order(
-            user_id=user_id,
-            username=username,
+            user_id=callback.from_user.id,
+            username=callback.from_user.username or "NoUsername",
             amount=data["amount"],
             currency=data["currency"],
             payment_details=data["payment_details"],
-            payment_method=method
+            payment_method=method,
+            chosen_requisite=chosen_card
         )
-        text = (
-            f"🏦 Оплата через Уралсиб\n\n"
-            f"Сумма: <b>{data['amount']} ₽</b>\n"
-            f"Номер карты: <code>{URALSIB_CARD}</code>\n\n"
-            f"⚠️ <b>Ручная проверка:</b> потребуется скриншот."
-        )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Я оплатил, отправить скриншот", callback_data=f"upload_{order_id}")]
-        ])
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-        await state.clear()
-    await callback.answer()
 
-@router.callback_query(F.data.startswith("yoomoney_paid_"))
-async def yoomoney_paid(callback: types.CallbackQuery):
-    order_id = int(callback.data.split("_")[-1])
-    order = await get_order_by_id(order_id)
-    if not order or order["user_id"] != callback.from_user.id:
-        await callback.answer("Заявка не найдена.")
-        return
-    if order["status"] != "created":
-        await callback.answer("Заявка уже обработана.")
-        return
-    await update_order_status(order_id, "waiting_payment")
-    await callback.message.edit_text(
-        callback.message.text + "\n\n⏳ <b>Ожидание подтверждения платежа...</b> (обычно до 1 минуты)",
-        parse_mode="HTML"
-    )
-    await callback.answer("Заявка поставлена в очередь на проверку.")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"upload_{order_id}")]
+    ])
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await state.clear()
 
+# Нажатие "Я оплатил" -> запрос скриншота
 @router.callback_query(F.data.startswith("upload_"))
 async def request_screenshot(callback: types.CallbackQuery, state: FSMContext):
     order_id = int(callback.data.split("_")[1])
@@ -195,30 +203,33 @@ async def request_screenshot(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(order_id=order_id)
     await callback.answer()
 
-# Единый обработчик для состояния ожидания скриншота (принимает фото и всё остальное)
+# Приём скриншота
 @router.message(StateFilter(ExchangeStates.waiting_screenshot))
 async def screenshot_handler(message: types.Message, state: FSMContext):
-    if message.photo:
-        data = await state.get_data()
-        order_id = data["order_id"]
-        file_id = message.photo[-1].file_id
-        await update_order_status(order_id, "waiting_approval", screenshot_file_id=file_id)
-        order = await get_order_by_id(order_id)
+    if not message.photo:
+        await message.answer("❌ Пришлите скриншот как изображение.")
+        return
 
-        admin_caption = (
-            f"📬 <b>Новая заявка #{order_id}</b>\n"
-            f"👤 {order['username']} (ID: {order['user_id']})\n"
-            f"💰 {order['amount']} ₽ → {order['currency']}\n"
-            f"Реквизиты: {order['payment_details']}\n"
-            f"Способ: {order['payment_method']}\n\n"
-            f"Для подтверждения ответьте на это сообщение командой /approve"
-        )
-        await bot.send_photo(ADMIN_ID, file_id, caption=admin_caption, parse_mode="HTML")
-        await message.answer("✅ Скриншот отправлен администратору.")
-        await state.clear()
-    else:
-        await message.answer("❌ Пришлите скриншот как изображение (не файл).")
+    data = await state.get_data()
+    order_id = data["order_id"]
+    file_id = message.photo[-1].file_id
+    await update_order_status(order_id, "waiting_approval", screenshot_file_id=file_id)
+    order = await get_order_by_id(order_id)
 
+    admin_caption = (
+        f"📬 <b>Новая заявка #{order_id}</b>\n"
+        f"👤 {order['username']} (ID: {order['user_id']})\n"
+        f"💰 {order['amount']} ₽ → {order['currency']}\n"
+        f"Реквизиты вывода: {order['payment_details']}\n"
+        f"Способ оплаты: {order['payment_method']}\n"
+        f"Использован реквизит: {order['chosen_requisite']}\n\n"
+        f"Для подтверждения ответьте на это сообщение командой /approve"
+    )
+    await bot.send_photo(ADMIN_ID, file_id, caption=admin_caption, parse_mode="HTML")
+    await message.answer("✅ Скриншот отправлен администратору.")
+    await state.clear()
+
+# Админские команды
 @router.message(Command("approve"))
 async def cmd_approve(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -277,9 +288,6 @@ dp.include_router(router)
 
 async def main():
     await database.init_db()
-    # Запускаем фоновую проверку платежей ЮMoney
-    asyncio.create_task(check_payments(bot))
-    # Запускаем поллинг
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
