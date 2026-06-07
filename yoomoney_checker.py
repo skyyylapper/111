@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 CHECK_INTERVAL = 30  # секунд
 
 async def check_payments(bot):
-    """Фоновая задача: периодически проверяет неподтверждённые заявки ЮMoney."""
     if not YOO_MONEY_TOKEN:
         logger.warning("YOO_MONEY_TOKEN не задан, автоматическая проверка отключена.")
         return
@@ -37,7 +36,6 @@ async def check_payments(bot):
             await asyncio.sleep(CHECK_INTERVAL)
 
 async def find_payment(session: aiohttp.ClientSession, label: str, amount: float) -> bool:
-    """Проверяет историю операций: есть ли входящий платёж с нужным label и суммой."""
     now = datetime.now()
     from_time = now - timedelta(hours=24)
     url = "https://yoomoney.ru/api/operation-history"
