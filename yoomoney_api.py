@@ -42,10 +42,11 @@ async def create_yoomoney_invoice(amount: float, label: str) -> str | None:
                             return (
                                 "https://yoomoney.ru/transfer/quickpay"
                                 f"?requestId={request_id}"
+                                f"&sum={amount:.2f}"
                                 f"&label={label}"
-                                f"&amount={amount:.2f}"
                                 "&comment=Оплата+заявки"
                             )
+                            
                         logger.error("Нет ни redirect_url, ни request_id в ответе")
                         return None
                     else:
