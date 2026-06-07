@@ -5,10 +5,6 @@ from config import YOO_MONEY_TOKEN, YOO_MONEY_WALLET
 logger = logging.getLogger(__name__)
 
 async def create_yoomoney_invoice(amount: float, label: str) -> str | None:
-    """
-    Выставляет счёт (p2p) через API ЮMoney.
-    Возвращает ссылку для оплаты или None при ошибке.
-    """
     if not YOO_MONEY_TOKEN:
         logger.error("YOO_MONEY_TOKEN не задан")
         return None
@@ -36,7 +32,7 @@ async def create_yoomoney_invoice(amount: float, label: str) -> str | None:
                     else:
                         logger.error(f"YooMoney invoice error: {data}")
                 else:
-                    logger.error(f"YooMoney API returned {resp.status}")
+                    logger.error(f"YooMoney API returned {resp.status}: {await resp.text()}")
     except Exception as e:
         logger.error(f"Failed to create YooMoney invoice: {e}")
     return None
